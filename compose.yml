@@ -1,0 +1,114 @@
+services:
+  arc-matrix-db:                 # <— service renamed from `db`
+    image: postgres:16
+    container_name: arc-matrix-db
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - ./volume/arc-matrix-db/var_lib_postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  arc-matrix:
+    image: matrixdotorg/synapse:latest
+    extra_hosts:
+      - "matrix.endurance.network:192.168.0.10"
+      - "sync.endurance.network:192.168.0.10"
+    container_name: arc-matrix
+    ports:
+    - "8008:8008"     
+    depends_on:
+      arc-matrix-db:
+        condition: service_healthy
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    volumes:
+      - ./volume/arc-matrix/data:/data
+      - ./volume/arc-matrix/media_store:/data/media_store
+    restart: unless-stopped
+    networks: [default]
+
+  slidingsync:
+    image: ghcr.io/matrix-org/sliding-sync:latest
+    extra_hosts:
+      - "matrix.endurance.network:192.168.0.10"
+      - "sync.endurance.network:192.168.0.10"
+    container_name: arc-matrix-slidingsync
+    depends_on:
+      arc-matrix-db:
+        condition: service_healthy
+      arc-matrix:
+        condition: service_started
+    environment:
+      SYNCV3_SERVER: "http://arc-matrix:8008"
+      SYNCV3_DB: "postgres://synapse:change_me@arc-matrix-db/synapse?sslmode=disable"  # host updated
+      SYNCV3_BINDADDR: ":8009"
+      SYNCV3_SECRET: "replace_me"
+    volumes:
+      - ./volume/arc-matrix-slidingsync/data:/data
+    restart: unless-stopped
+    networks: [default]
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: mautrix-whatsapp
+    depends_on:
+      arc-matrix:
+        condition: service_started
+      arc-matrix-db:
+        condition: service_healthy
+    environment:
+      TZ: "UTC"
+      LOG_LEVEL: "info"
+    volumes:
+      - ./volume/mautrix-whatsapp:/data
+    restart: unless-stopped
+    networks: [default]
+
+  mautrix-slack:
+    image: dock.mau.dev/mautrix/slack:latest
+    container_name: mautrix-slack
+    ports:
+      - "29335:29335"
+
+    depends_on:
+      arc-matrix:
+        condition: service_started
+      arc-matrix-db:
+        condition: service_healthy
+    environment:
+      TZ: "UTC"
+      LOG_LEVEL: "info"
+    volumes:
+      - ./volume/mautrix-slack:/data
+    restart: unless-stopped
+    networks: [default]
+
+  mautrix-imessage:
+    image: dock.mau.dev/mautrix/imessage:latest
+    container_name: mautrix-imessage
+    ports:
+      - "29334:29334"
+    depends_on:
+      arc-matrix:
+        condition: service_started
+      arc-matrix-db:
+        condition: service_healthy
+    environment:
+      TZ: "UTC"
+      LOG_LEVEL: "info"
+    volumes:
+      - ./volume/mautrix-imessage:/data
+    restart: unless-stopped
+    networks: [default]
+
+networks:
+  default:
+    name: matrix-internal
